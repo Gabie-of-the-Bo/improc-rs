@@ -6,7 +6,7 @@ pub enum Padding {
 }
 
 impl<T: ImageData> Image<T> {
-    pub fn to_single_channel(&mut self) -> Image<T> {
+    pub fn to_single_channel(&self) -> Image<T> {
         assert!(self.color == ColorSpace::Gray);
 
         let mut res = Image::<T>::zeros(self.height, self.width, 1);
@@ -16,7 +16,7 @@ impl<T: ImageData> Image<T> {
         return res;
     }
 
-    pub fn to_three_channels(&mut self) -> Image<T> {
+    pub fn to_three_channels(&self) -> Image<T> {
         assert!(self.channels == 1);
 
         let mut res = Image::<T>::zeros(self.height, self.width, 3);
@@ -166,7 +166,7 @@ impl<T: ImageData> Image<T> {
         };
     }
 
-    pub fn threshold(&mut self, thres: T) -> Image<bool> {
+    pub fn threshold(&self, thres: T) -> Image<bool> {
         assert!(self.channels == 1);
 
         return Image {
@@ -302,7 +302,7 @@ impl<T: ImageData> Image<T> {
         return self.convolution(window, window, &kernel, padding);
     }
 
-    pub fn sobel(&mut self) -> Image<f32> {
+    pub fn sobel(&self) -> Image<f32> {
         assert!(self.channels == 1);
 
         // Compute x and y gradients
