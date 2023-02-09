@@ -1,4 +1,4 @@
-use crate::{model::{Image, ColorSpace}, typing::ImageData};
+use crate::{model::{Image, ColorSpace}, typing::ImageData, colors::Gradient};
 
 #[derive(Copy, Clone)]
 pub enum Padding {
@@ -118,6 +118,22 @@ impl<T: ImageData> Image<T> {
         *self = res;
 
         return self;
+    }
+
+    pub fn fake_color(&self, gradient: &Gradient) -> Image<u8> {
+        assert!(self.channels == 1 && self.color == ColorSpace::Gray);
+
+        let mut res = Image::zeros(self.height, self.width, 3);
+
+        res.pixels().zip(self.data.iter()).for_each(|(p, d)| {
+            let (r, g, b) = gradient.get_color(d.to_f32());
+            
+            p[0] = r;
+            p[1] = g;
+            p[2] = b;
+        });
+
+        return  res;
     }
 
     pub fn grayscale(&mut self) -> &mut Self {
@@ -272,8 +288,8 @@ impl<T: ImageData> Image<T> {
         for i in 0..w_side {
             for j in 0..w_side {
                 let k_idx = i * w_side + j;
-                let i_n = i - window;
-                let j_n = j - window;
+                let i_n = i as i32 - window as i32;
+                let j_n = j as i32 - window as i32;
 
                 kernel[k_idx] = p * (-((i_n * i_n + j_n * j_n) as f32) / (s2 + s2)).exp();
             }   
