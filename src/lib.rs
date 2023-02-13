@@ -6,6 +6,8 @@ pub mod noise;
 pub mod metrics;
 pub mod timing;
 pub mod colors;
+pub mod keypoints;
+pub mod features;
 mod utils;
 
 #[cfg(test)]

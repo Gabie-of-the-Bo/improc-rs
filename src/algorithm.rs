@@ -331,4 +331,12 @@ impl Image<f32> {
         let max = self.data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap().to_f32();
         self.data.iter_mut().for_each(|i| *i /= max);
     }
+
+    pub fn minmax_normalize(&mut self) {
+        let min = self.data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap().to_f32();
+        let max = self.data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap().to_f32();
+        let amp = max - min;
+
+        self.data.iter_mut().for_each(|i| *i = (*i - min) / amp);
+    }
 }

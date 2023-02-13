@@ -1,14 +1,17 @@
-use improc::{model::Image, algorithm::Padding, colors::Gradient};
+use improc::{model::Image, algorithm::Padding, colors::Gradient, keypoints::KeyPoint, timing::time_many};
 
 pub fn main() {
-    let img = Image::read("img.png")
-        .grayscale()
-        .to_single_channel()
-        .gaussian_blur(2, 0.5, Padding::Repeat)
-        .threshold(100)
-        .sobel()
-        .gaussian_blur(5, 1.0, Padding::Repeat)
-        .fake_color(&Gradient::simple(vec!((0, 0, 0), (255, 0, 0))));
+    let mut img = Image::read("room2.png");
+
+    let keypoints = img.fast(10, 5.0);
+
+    println!("{:?}", time_many(|| {
+        img.fast(10, 3.0);
+    }, 100));
+
+    println!("Corners: {}", keypoints.len());
+
+    keypoints.iter().for_each(|p| p.draw(&mut img));
 
     img.show("Borders");
 }

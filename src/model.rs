@@ -35,6 +35,11 @@ impl<T: ImageData> Image<T> {
         return Image { height, width, channels, color: ColorSpace::RGB, data: vec!(T::max(); height * width * channels) }
     }
 
+    pub fn get_pixel(&self, x: usize, y: usize) -> &[T] {
+        let idx = (self.width * y + x) * self.channels;
+        return &self.data[idx..idx + self.channels];
+    }
+
     pub fn get_pixel_mut(&mut self, x: usize, y: usize) -> &mut [T] {
         let idx = (self.width * y + x) * self.channels;
         return &mut self.data[idx..idx + self.channels];
@@ -135,11 +140,11 @@ impl Image<u8> {
         let (width, height) = image.dimensions();
 
         let mut res = Image::<u8>::zeros(height as usize, width as usize, 3);
-
-        for (from, to) in res.data.chunks_exact_mut(3).zip(image.as_rgb8().unwrap().chunks_exact(3)) {
-            from[0] = to[0];
-            from[1] = to[1];
-            from[2] = to[2];
+        
+        for (from, to) in res.data.chunks_exact_mut(3).zip(image.pixels()) {
+            from[0] = to.2[0];
+            from[1] = to.2[1];
+            from[2] = to.2[2];
         }
 
         return res;
