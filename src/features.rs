@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use crunchy::unroll;
 
-use crate::{typing::ImageData, model::Image, keypoints::{KeyPoint, Descriptor}, algorithm::Padding, data::BRIEF_OFFSETS};
+use crate::{typing::ImageData, model::{Image, ColorSpace}, keypoints::{KeyPoint, Descriptor}, algorithm::Padding, data::BRIEF_OFFSETS};
 
 impl<T: ImageData> Image<T> {
-    pub fn non_maximum_suppression_kd<F: Fn(&KeyPoint) -> i32>(&self, keypoints: Vec<KeyPoint>, non_maximum_suppression_dist: f32, metric: F) -> Vec<KeyPoint> {
+    fn non_maximum_suppression_kd<F: Fn(&KeyPoint) -> i32>(&self, keypoints: Vec<KeyPoint>, non_maximum_suppression_dist: f32, metric: F) -> Vec<KeyPoint> {
         let tree = kd_tree::KdTree::build_by_ordered_float(keypoints);
 
         return tree.into_iter().filter(|&p| {
@@ -117,7 +115,7 @@ impl<T: ImageData> Image<T> {
         return 1 + ((p as i16) > p_up) as u8 - ((p as i16) < p_down) as u8;
     }
 
-    pub fn fast_neighborhood_full_check(&self, i: usize, j: usize, p_up: i16, p_down: i16) -> bool {
+    fn fast_neighborhood_full_check(&self, i: usize, j: usize, p_up: i16, p_down: i16) -> bool {
         let mut n = self.fast_neighborhood(i, j);
         let mut consecutives = vec!();
         consecutives.reserve(8);
@@ -143,24 +141,24 @@ impl<T: ImageData> Image<T> {
                (n[0] != 1 && n[0] == n[15] && consecutives[0].1 + consecutives.last().unwrap().1 >= 12);
     }
 
-    pub fn fast_score(&self, i: usize, j: usize) -> i32 {
+    fn fast_score(&self, i: usize, j: usize) -> i32 {
         let p = self.get_pixel(j, i)[0].to_u8() as i32;
         return self.fast_neighborhood(i, j).into_iter().map(|i| p - i as i32).sum();
     }
 
     pub fn fast(&self, t: i16, non_maximum_suppression_dist: f32, mut margin: usize) -> Vec<KeyPoint> {
-        let cpy = self.clone().grayscale().to_single_channel();
-        let mut res = vec!();
+        assert!(self.channels == 1 && self.color == ColorSpace::Gray);
 
+        let mut res = vec!();
         margin = margin.max(3);
 
-        for i in margin..cpy.height - margin {
-            for j in margin..cpy.width - margin {
-                let p = cpy.get_pixel(j, i)[0].to_u8() as i16;
+        for i in margin..self.height - margin {
+            for j in margin..self.width - margin {
+                let p = self.get_pixel(j, i)[0].to_u8() as i16;
                 let p_up = p + t;
                 let p_down = p - t;
                 
-                if cpy.fast_neighborhood_fast_check(i, j, p_up, p_down) && cpy.fast_neighborhood_full_check(i, j, p_up, p_down) {
+                if self.fast_neighborhood_fast_check(i, j, p_up, p_down) && self.fast_neighborhood_full_check(i, j, p_up, p_down) {
                     res.push(KeyPoint::new(j as f32, i as f32, (0, 255, 0), crate::keypoints::KeyPointShape::Cross));
                 }
             }
@@ -194,7 +192,7 @@ impl<T: ImageData> Image<T> {
         kp.angle = my.atan2(mx);
     }
 
-    pub fn compute_brief(&self, kp: &mut KeyPoint) {
+    fn compute_brief(&self, kp: &mut KeyPoint) {
         let mut res = [0u8; 64];
         let xi = kp.x as i32;
         let yi = kp.y as i32;
@@ -216,12 +214,14 @@ impl<T: ImageData> Image<T> {
     }
 
     pub fn brief(&self, keypoints: &mut Vec<KeyPoint>) {
+        assert!(self.channels == 1 && self.color == ColorSpace::Gray);
+
         for kp in keypoints {
             self.compute_brief(kp);
         }
     }
 
-    pub fn compute_rotated_brief(&self, kp: &mut KeyPoint) {
+    fn compute_rotated_brief(&self, kp: &mut KeyPoint) {
         let mut res = [0u8; 64];
         let xi = kp.x as i32;
         let yi = kp.y as i32;
@@ -252,6 +252,8 @@ impl<T: ImageData> Image<T> {
     }
 
     pub fn rotated_brief(&self, keypoints: &mut Vec<KeyPoint>) {
+        assert!(self.channels == 1 && self.color == ColorSpace::Gray);
+
         for kp in keypoints {
             self.compute_angle(kp);
             self.compute_rotated_brief(kp);
@@ -259,13 +261,20 @@ impl<T: ImageData> Image<T> {
     }
 
     pub fn orb(&self, t: i16, non_maximum_suppression_dist: f32) -> Vec<KeyPoint> {
-        let mut keypoints = self.fast(t, non_maximum_suppression_dist, 46);
+        let correct_format = self.channels == 1 && self.color == ColorSpace::Gray;
+        let opt;
 
-        for kp in keypoints.iter_mut() {
-            self.compute_angle(kp);
-            self.compute_rotated_brief(kp);
-        }
+        let cpy = if correct_format { 
+            self
         
+        } else {            
+            opt = Some(self.clone().grayscale().to_single_channel());
+            opt.as_ref().unwrap()
+        };
+
+        let mut keypoints = cpy.fast(t, non_maximum_suppression_dist, 46);
+        cpy.rotated_brief(&mut keypoints);
+
         return keypoints;
     }
 } 
