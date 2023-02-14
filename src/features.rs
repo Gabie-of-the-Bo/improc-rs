@@ -1,7 +1,22 @@
-use crate::{typing::ImageData, model::Image, keypoints::KeyPoint, algorithm::Padding};
+use std::collections::HashMap;
+
+use crunchy::unroll;
+
+use crate::{typing::ImageData, model::Image, keypoints::{KeyPoint, Descriptor}, algorithm::Padding, data::BRIEF_OFFSETS};
 
 impl<T: ImageData> Image<T> {
-    pub fn harris_corners(&self, threshold: f32, non_maximum_suppresion_dist: f32) -> Vec<KeyPoint> {
+    pub fn non_maximum_suppression_kd<F: Fn(&KeyPoint) -> i32>(&self, keypoints: Vec<KeyPoint>, non_maximum_suppression_dist: f32, metric: F) -> Vec<KeyPoint> {
+        let tree = kd_tree::KdTree::build_by_ordered_float(keypoints);
+
+        return tree.into_iter().filter(|&p| {
+            let curr = metric(p);
+            tree.within_radius(p, non_maximum_suppression_dist).iter()
+                .all(|p| curr >= metric(p))
+                
+        }).cloned().collect::<Vec<KeyPoint>>();
+    }
+
+    pub fn harris_corners(&self, threshold: f32, non_maximum_suppression_dist: f32) -> Vec<KeyPoint> {
         const K: f32 = 0.05;
 
         // Ensure input format
@@ -49,15 +64,10 @@ impl<T: ImageData> Image<T> {
             }   
         }
 
-        if non_maximum_suppresion_dist > 0.0 {
-            res = res.iter().filter(|p| {
-                let curr = xx.get_pixel_mut(p.x as usize, p.y as usize)[0];
-
-                res.iter().filter(|p2| p.manhattan_distance(p2) < non_maximum_suppresion_dist)
-                          .map(|p| xx.get_pixel_mut(p.x as usize, p.y as usize)[0])
-                          .all(|v| v <= curr)
-
-            }).cloned().collect();
+        if non_maximum_suppression_dist > 0.0 {
+            res = self.non_maximum_suppression_kd(res, non_maximum_suppression_dist, |p| {
+                self.get_pixel(p.x as usize, p.y as usize)[0].to_u8() as i32
+            });
         }
 
         return res;
@@ -102,42 +112,35 @@ impl<T: ImageData> Image<T> {
                (p0 < p_down) as u8 + (p1 < p_down) as u8 + (p2 < p_down) as u8 + (p3 < p_down) as u8 >= 3;
     }
 
+    // 0 -> lower, 1 -> none, 2 -> higher
     fn map_fast_pixel_value(p: u8, p_up: i16, p_down: i16) -> u8 {
-        return if (p as i16) > p_up {
-            0
-        } else if (p as i16) < p_down {
-            1
-        } else {
-            2
-        }
+        return 1 + ((p as i16) > p_up) as u8 - ((p as i16) < p_down) as u8;
     }
 
     pub fn fast_neighborhood_full_check(&self, i: usize, j: usize, p_up: i16, p_down: i16) -> bool {
-        let n = self.fast_neighborhood(i, j);
+        let mut n = self.fast_neighborhood(i, j);
         let mut consecutives = vec!();
-        consecutives.reserve(16);
+        consecutives.reserve(8);
 
-        n.into_iter()
-        .map(|i| Image::<T>::map_fast_pixel_value(i, p_up, p_down))
-        .for_each(|i| {
-            if let Some((elem, its)) = consecutives.last_mut() {
-                if *elem == i {
-                    *its += 1;
+        n[0] = Image::<T>::map_fast_pixel_value(n[0], p_up, p_down);
+        consecutives.push((n[0], 1));
+
+        unroll! {
+            for idx in 1..16 {
+                n[idx] = Image::<T>::map_fast_pixel_value(n[idx], p_up, p_down);
+                let (elem, run) = consecutives.last_mut().unwrap();
+    
+                if *elem == n[idx] {
+                    *run += 1;
                 
                 } else {
-                    consecutives.push((i, 1));
+                    consecutives.push((n[idx], 1));
                 }
-
-            } else {
-                consecutives.push((i, 1));
             }
-        });
-        
-        return consecutives.iter().any(|&i| i.1 >= 12) || 
-                (
-                    Image::<T>::map_fast_pixel_value(n[0], p_up, p_down) == Image::<T>::map_fast_pixel_value(n[15], p_up, p_down) && 
-                    consecutives[0].1 + consecutives.last().unwrap().1 >= 12
-                );
+        }
+
+        return consecutives.iter().any(|&i| i.0 != 1 && i.1 >= 12) || 
+               (n[0] != 1 && n[0] == n[15] && consecutives[0].1 + consecutives.last().unwrap().1 >= 12);
     }
 
     pub fn fast_score(&self, i: usize, j: usize) -> i32 {
@@ -145,13 +148,14 @@ impl<T: ImageData> Image<T> {
         return self.fast_neighborhood(i, j).into_iter().map(|i| p - i as i32).sum();
     }
 
-    pub fn fast(&self, t: i16, non_maximum_suppresion_dist: f32) -> Vec<KeyPoint> {
+    pub fn fast(&self, t: i16, non_maximum_suppression_dist: f32, mut margin: usize) -> Vec<KeyPoint> {
         let cpy = self.clone().grayscale().to_single_channel();
-
         let mut res = vec!();
 
-        for i in 3..cpy.height - 3 {
-            for j in 3..cpy.width - 3 {
+        margin = margin.max(3);
+
+        for i in margin..cpy.height - margin {
+            for j in margin..cpy.width - margin {
                 let p = cpy.get_pixel(j, i)[0].to_u8() as i16;
                 let p_up = p + t;
                 let p_down = p - t;
@@ -162,17 +166,106 @@ impl<T: ImageData> Image<T> {
             }
         }
 
-        if non_maximum_suppresion_dist > 0.0 {
-            res = res.iter().filter(|p| {
-                let curr = cpy.fast_score(p.y as usize, p.x as usize);
-
-                res.iter().filter(|p2| p.manhattan_distance(p2) < non_maximum_suppresion_dist)
-                          .map(|p| cpy.fast_score(p.y as usize, p.x as usize))
-                          .all(|v| v <= curr)
-
-            }).cloned().collect();
+        if non_maximum_suppression_dist > 0.0 {
+            res = self.non_maximum_suppression_kd(res, non_maximum_suppression_dist, |p| {
+                self.fast_score(p.y as usize, p.x as usize)
+            });
         }
 
         return res;
+    }
+
+    pub fn compute_angle(&self, kp: &mut KeyPoint) {
+        let xi = kp.x as usize;
+        let yi = kp.y as usize;
+
+        let p00 = self.get_pixel(xi - 1, yi - 1)[0].to_f32();
+        let p01 = self.get_pixel(xi, yi - 1)[0].to_f32();
+        let p02 = self.get_pixel(xi + 1, yi - 1)[0].to_f32();
+        let p10 = self.get_pixel(xi - 1, yi)[0].to_f32();
+        let p12 = self.get_pixel(xi + 1, yi)[0].to_f32();
+        let p20 = self.get_pixel(xi - 1, yi + 1)[0].to_f32();
+        let p21 = self.get_pixel(xi, yi + 1)[0].to_f32();
+        let p22 = self.get_pixel(xi + 1, yi + 1)[0].to_f32();
+
+        let mx = p02 + p12 + p22 - p00 - p10 - p20;
+        let my = p20 + p21 + p22 - p00 - p01 - p02;
+
+        kp.angle = my.atan2(mx);
+    }
+
+    pub fn compute_brief(&self, kp: &mut KeyPoint) {
+        let mut res = [0u8; 64];
+        let xi = kp.x as i32;
+        let yi = kp.y as i32;
+
+        for i in 0..64 {
+            let idx = i * 8;
+
+            unroll! {
+                for j in 0..8 {
+                    let [x0, y0, x1, y1] = BRIEF_OFFSETS[idx + j];
+                    let p0 = self.get_pixel((xi + x0 as i32) as usize, (yi + y0 as i32) as usize)[0];
+                    let p1 = self.get_pixel((xi + x1 as i32) as usize, (yi + y1 as i32) as usize)[0];
+                    res[i] |= ((p0 < p1) as u8) << j;
+                }
+            }
+        }
+
+        kp.descriptor = Descriptor::BRIEF(res);
+    }
+
+    pub fn brief(&self, keypoints: &mut Vec<KeyPoint>) {
+        for kp in keypoints {
+            self.compute_brief(kp);
+        }
+    }
+
+    pub fn compute_rotated_brief(&self, kp: &mut KeyPoint) {
+        let mut res = [0u8; 64];
+        let xi = kp.x as i32;
+        let yi = kp.y as i32;
+
+        let s = kp.angle.sin();
+        let c = kp.angle.cos();
+
+        for i in 0..64 {
+            let idx = i * 8;
+
+            unroll! {
+                for j in 0..8 {
+                    let [x0, y0, x1, y1] = BRIEF_OFFSETS[idx + j];
+
+                    let x0 = (x0 as f32 * c - y0 as f32 * s) as i32;
+                    let x1 = (x1 as f32 * c - y1 as f32 * s) as i32;
+                    let y0 = (y0 as f32 * c + x0 as f32 * s) as i32;
+                    let y1 = (y1 as f32 * c + x1 as f32 * s) as i32;
+
+                    let p0 = self.get_pixel((xi + x0) as usize, (yi + y0) as usize)[0];
+                    let p1 = self.get_pixel((xi + x1) as usize, (yi + y1) as usize)[0];
+                    res[i] |= ((p0 < p1) as u8) << j;
+                }
+            }
+        }
+
+        kp.descriptor = Descriptor::RBRIEF(res);
+    }
+
+    pub fn rotated_brief(&self, keypoints: &mut Vec<KeyPoint>) {
+        for kp in keypoints {
+            self.compute_angle(kp);
+            self.compute_rotated_brief(kp);
+        }
+    }
+
+    pub fn orb(&self, t: i16, non_maximum_suppression_dist: f32) -> Vec<KeyPoint> {
+        let mut keypoints = self.fast(t, non_maximum_suppression_dist, 46);
+
+        for kp in keypoints.iter_mut() {
+            self.compute_angle(kp);
+            self.compute_rotated_brief(kp);
+        }
+        
+        return keypoints;
     }
 } 

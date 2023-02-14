@@ -1,3 +1,5 @@
+use kd_tree::KdPoint;
+
 use crate::{typing::ImageData, model::Image};
 
 #[derive(Clone)]
@@ -6,16 +8,40 @@ pub enum KeyPointShape {
 }
 
 #[derive(Clone)]
+pub enum Descriptor {
+    None,
+    BRIEF([u8; 64]),
+    RBRIEF([u8; 64])
+}
+
+#[derive(Clone)]
 pub struct KeyPoint {
     pub x: f32,
     pub y: f32,
+
+    pub descriptor: Descriptor,
+    pub angle: f32,
+
     color: (u8, u8, u8),
     shape: KeyPointShape
 }
 
+impl KdPoint for KeyPoint {
+    type Scalar = f32;
+    type Dim = typenum::U2;
+
+    fn at(&self, i: usize) -> Self::Scalar {
+        return match i {
+            0 => self.x,
+            1 => self.y,
+            _ => unreachable!()
+        }
+    }
+}
+
 impl KeyPoint {
     pub fn new(x: f32, y: f32, color: (u8, u8, u8), shape: KeyPointShape) -> KeyPoint {
-        return KeyPoint {x, y, color, shape};
+        return KeyPoint {x, y, color, shape, angle: 0.0, descriptor: Descriptor::None};
     }
 
     pub fn manhattan_distance(&self, b: &KeyPoint) -> f32 {
