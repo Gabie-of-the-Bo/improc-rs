@@ -5,6 +5,11 @@ pub enum Padding {
     Zeros, Repeat
 }
 
+#[derive(Copy, Clone)]
+pub enum Interpolation {
+    Nearest
+}
+
 impl<T: ImageData> Image<T> {
     pub fn to_single_channel(&self) -> Image<T> {
         assert!(self.color == ColorSpace::Gray);
@@ -323,6 +328,61 @@ impl<T: ImageData> Image<T> {
         }
 
         return x;
+    }
+
+    pub fn resize(&mut self, width: usize, height: usize, interpolation: Interpolation) -> &mut Self {
+        let channels = self.channels;
+        let mut res = Image::<T>::zeros(height, width, channels);
+
+        res.color = self.color;
+
+        match interpolation {
+            Interpolation::Nearest => {
+                let fx = self.width as f32 / width as f32;
+                let fy = self.height as f32 / height as f32;
+
+                for i in 0..height {
+                    for j in 0..width {
+                        let r = res.get_pixel_mut(j, i);
+                        let p = self.get_pixel_mut((j as f32 * fx) as usize, (i as f32 * fy) as usize);
+
+                        for c in 0..channels {
+                            r[c] = p[c];
+                        }
+                    }
+                }
+            }
+        }
+
+        *self = res;
+
+        return self;
+    }
+
+    pub fn horizontal_stack(&self, b: &Image<T>) -> Image<T> {
+        assert!(self.width == b.width && self.height == b.height && self.channels == b.channels);
+
+        let mut res = Image::zeros(self.height, self.width * 2, self.channels);
+
+        for i in 0..self.height {
+            for j in 0..self.width {
+                let p1 = self.get_pixel(j, i);
+                let r1 = res.get_pixel_mut(j, i);
+
+                for c in 0..self.channels {
+                    r1[c] = p1[c];
+                }
+
+                let p2 = b.get_pixel(j, i);
+                let r2 = res.get_pixel_mut(j + self.width, i);
+
+                for c in 0..self.channels {
+                    r2[c] = p2[c];
+                }
+            }
+        }
+
+        return res;
     }
 }
 

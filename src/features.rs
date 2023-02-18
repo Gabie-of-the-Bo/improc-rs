@@ -1,17 +1,31 @@
 use crunchy::unroll;
+use kiddo::KdTree;
+use lazy_static::lazy_static;
 
-use crate::{typing::ImageData, model::{Image, ColorSpace}, keypoints::{KeyPoint, Descriptor}, algorithm::Padding, data::BRIEF_OFFSETS};
+use crate::{typing::ImageData, model::{Image, ColorSpace}, keypoints::{KeyPoint, Descriptor}, algorithm::{Padding, Interpolation}, data::BRIEF_OFFSETS};
+
+lazy_static!(
+    static ref FAST_PATCH_SIZE: i32 = 32;
+    static ref HALF_FAST_PATCH_SIZE: i32 = *FAST_PATCH_SIZE / 2;
+    static ref CIRCLE_LIM: Vec<i32> = (0..=*FAST_PATCH_SIZE).map(
+        |i| (((i as f32 - *HALF_FAST_PATCH_SIZE as f32) / *HALF_FAST_PATCH_SIZE as f32).acos().sin() * *HALF_FAST_PATCH_SIZE as f32) as i32
+    ).collect();
+);
 
 impl<T: ImageData> Image<T> {
-    fn non_maximum_suppression_kd<F: Fn(&KeyPoint) -> i32>(&self, keypoints: Vec<KeyPoint>, non_maximum_suppression_dist: f32, metric: F) -> Vec<KeyPoint> {
-        let tree = kd_tree::KdTree::build_by_ordered_float(keypoints);
+    fn non_maximum_suppression_kd(&self, mut keypoints: Vec<KeyPoint>, mut non_maximum_suppression_dist: f32) -> Vec<KeyPoint> {
+        non_maximum_suppression_dist *= non_maximum_suppression_dist;
 
-        return tree.into_iter().filter(|&p| {
-            let curr = metric(p);
-            tree.within_radius(p, non_maximum_suppression_dist).iter()
-                .all(|p| curr >= metric(p))
-                
-        }).cloned().collect::<Vec<KeyPoint>>();
+        let mut tree = KdTree::new();
+        keypoints.iter().for_each(|p| tree.add(&[p.x, p.y], p.clone()).unwrap());
+
+        keypoints.retain(|p| {
+            tree.within_unsorted(&[p.x, p.y], non_maximum_suppression_dist, &kiddo::distance::squared_euclidean)
+                .unwrap().iter()
+                .all(|(_, i)| i.score <= p.score)
+        });
+
+        return keypoints;
     }
 
     pub fn harris_corners(&self, threshold: f32, non_maximum_suppression_dist: f32) -> Vec<KeyPoint> {
@@ -57,15 +71,16 @@ impl<T: ImageData> Image<T> {
                 let r = xx.get_pixel_mut(j, i)[0];
 
                 if r > threshold {
-                    res.push(KeyPoint::new(j as f32, i as f32, (0, 255, 0), crate::keypoints::KeyPointShape::Cross));
+                    let mut kp = KeyPoint::new(j as f32, i as f32, (0, 255, 0), crate::keypoints::KeyPointShape::Cross);
+                    kp.score = self.get_pixel(j, i)[0].to_u8() as i32;
+
+                    res.push(kp);
                 }
             }   
         }
 
         if non_maximum_suppression_dist > 0.0 {
-            res = self.non_maximum_suppression_kd(res, non_maximum_suppression_dist, |p| {
-                self.get_pixel(p.x as usize, p.y as usize)[0].to_u8() as i32
-            });
+            res = self.non_maximum_suppression_kd(res, non_maximum_suppression_dist);
         }
 
         return res;
@@ -159,15 +174,16 @@ impl<T: ImageData> Image<T> {
                 let p_down = p - t;
                 
                 if self.fast_neighborhood_fast_check(i, j, p_up, p_down) && self.fast_neighborhood_full_check(i, j, p_up, p_down) {
-                    res.push(KeyPoint::new(j as f32, i as f32, (0, 255, 0), crate::keypoints::KeyPointShape::Cross));
+                    let mut kp = KeyPoint::new(j as f32, i as f32, (0, 255, 0), crate::keypoints::KeyPointShape::Square);
+                    kp.score = self.fast_score(i, j);
+
+                    res.push(kp);
                 }
             }
         }
 
         if non_maximum_suppression_dist > 0.0 {
-            res = self.non_maximum_suppression_kd(res, non_maximum_suppression_dist, |p| {
-                self.fast_score(p.y as usize, p.x as usize)
-            });
+            res = self.non_maximum_suppression_kd(res, non_maximum_suppression_dist);
         }
 
         return res;
@@ -177,19 +193,23 @@ impl<T: ImageData> Image<T> {
         let xi = kp.x as usize;
         let yi = kp.y as usize;
 
-        let p00 = self.get_pixel(xi - 1, yi - 1)[0].to_f32();
-        let p01 = self.get_pixel(xi, yi - 1)[0].to_f32();
-        let p02 = self.get_pixel(xi + 1, yi - 1)[0].to_f32();
-        let p10 = self.get_pixel(xi - 1, yi)[0].to_f32();
-        let p12 = self.get_pixel(xi + 1, yi)[0].to_f32();
-        let p20 = self.get_pixel(xi - 1, yi + 1)[0].to_f32();
-        let p21 = self.get_pixel(xi, yi + 1)[0].to_f32();
-        let p22 = self.get_pixel(xi + 1, yi + 1)[0].to_f32();
+        let mut mx = 0;
+        let mut my = 0;
 
-        let mx = p02 + p12 + p22 - p00 - p10 - p20;
-        let my = p20 + p21 + p22 - p00 - p01 - p02;
+        for i in -*HALF_FAST_PATCH_SIZE..=*HALF_FAST_PATCH_SIZE {
+            let circle_limit = CIRCLE_LIM[(i + *HALF_FAST_PATCH_SIZE) as usize];
+            let mut sum = 0;
 
-        kp.angle = my.atan2(mx);
+            for j in -circle_limit..=circle_limit {
+                let p = self.get_pixel((xi as i32 + j) as usize, (yi as i32 + i) as usize)[0].to_u8() as i32;
+                mx += j * p;    
+                sum += p;
+            }
+
+            my += i * sum;
+        }
+
+        kp.angle = (my as f32).atan2(mx as f32);
     }
 
     fn compute_brief(&self, kp: &mut KeyPoint) {
@@ -261,19 +281,44 @@ impl<T: ImageData> Image<T> {
     }
 
     pub fn orb(&self, t: i16, non_maximum_suppression_dist: f32) -> Vec<KeyPoint> {
-        let correct_format = self.channels == 1 && self.color == ColorSpace::Gray;
-        let opt;
+        let mut cpy = self.clone();
 
-        let cpy = if correct_format { 
-            self
-        
-        } else {            
-            opt = Some(self.clone().grayscale().to_single_channel());
-            opt.as_ref().unwrap()
-        };
+        if self.color != ColorSpace::Gray {
+            cpy.grayscale();
+        }
 
-        let mut keypoints = cpy.fast(t, non_maximum_suppression_dist, 46);
-        cpy.rotated_brief(&mut keypoints);
+        if self.channels != 1 {
+            cpy = cpy.to_single_channel();
+        }
+
+        cpy.gaussian_blur(1, 1.0, Padding::Repeat);
+        let mut pyramid = vec!(cpy);
+
+        for _ in 0..3 {
+            let mut new_level = pyramid.last().unwrap().clone();
+            new_level.resize(new_level.width / 2, new_level.height / 2, Interpolation::Nearest);
+            new_level.gaussian_blur(1, 1.0, Padding::Repeat);
+            pyramid.push(new_level);
+        }
+
+        let mut keypoints = vec!();
+
+        for (i, p) in pyramid.iter().enumerate() {
+            let mut level_keypoints = p.fast(t, 0.0, 46);
+            p.rotated_brief(&mut level_keypoints);
+
+            let scale_x = self.width as f32 / p.width as f32;
+            let scale_y = self.height as f32 / p.height as f32;
+
+            keypoints.extend(level_keypoints.into_iter().map(|mut p| {
+                p.octave = i;
+                p.x *= scale_x;
+                p.y *= scale_y;
+                p
+            }));
+        }
+
+        keypoints = self.non_maximum_suppression_kd(keypoints, non_maximum_suppression_dist);
 
         return keypoints;
     }

@@ -1,14 +1,17 @@
-use improc::{model::Image, timing::time_many};
+use improc::{model::Image, matching::{match_descriptors, visualize_matches}};
 
 pub fn main() {
-    let mut img = Image::read("room3.png");
+    let img1 = Image::read("houses/img1.png");
+    let keypoints1 = img1.orb(20, 5.0);
+    
+    let img2 = Image::read("houses/img2.png");
+    let keypoints2 = img2.orb(20, 5.0);
 
-    println!("{:?}", time_many(|| { img.orb(15, 5.0); }, 100));
+    println!("Found {} and {} features", keypoints1.len(), keypoints2.len());
 
-    let keypoints = img.orb(10, 5.0);
-    keypoints.iter().for_each(|p| p.draw(&mut img));
+    let matches = match_descriptors(&keypoints1, &keypoints2, 0.8);
 
-    println!("Corners: {}", keypoints.len());
+    println!("{} matches found", matches.len());
 
-    img.show("Borders");
+    visualize_matches(&img1, &img2, &matches);
 }

@@ -1,47 +1,55 @@
-use kd_tree::KdPoint;
-
 use crate::{typing::ImageData, model::Image};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum KeyPointShape {
     Dot, BigDot, Cross, Square
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Default)]
 pub enum Descriptor {
+    #[default]
     None,
     BRIEF([u8; 64]),
     RBRIEF([u8; 64])
 }
 
-#[derive(Clone)]
-pub struct KeyPoint {
-    pub x: f32,
-    pub y: f32,
+impl Descriptor {
+    pub fn distance(&self, b: &Descriptor) -> u32 {
+        return match (self, b) {
+            // Hamming distance
+            (Descriptor::BRIEF(a), Descriptor::BRIEF(b)) |
+            (Descriptor::RBRIEF(a), Descriptor::RBRIEF(b)) => a.iter().zip(b).map(|(i, j)| (i ^ j).count_ones()).sum(),
 
-    pub descriptor: Descriptor,
-    pub angle: f32,
+            _ => unreachable!()
+        }
+    }
 
-    color: (u8, u8, u8),
-    shape: KeyPointShape
-}
-
-impl KdPoint for KeyPoint {
-    type Scalar = f32;
-    type Dim = typenum::U2;
-
-    fn at(&self, i: usize) -> Self::Scalar {
-        return match i {
-            0 => self.x,
-            1 => self.y,
+    pub fn inner_array(&self) -> &[u8; 64] {
+        return match self {
+            // Hamming distance
+            Descriptor::BRIEF(a) | Descriptor::RBRIEF(a) => &a,
             _ => unreachable!()
         }
     }
 }
 
+#[derive(Clone, PartialEq)]
+pub struct KeyPoint {
+    pub x: f32,
+    pub y: f32,
+
+    pub descriptor: Descriptor,
+    pub octave: usize,
+    pub score: i32,
+    pub angle: f32,
+
+    pub color: (u8, u8, u8),
+    shape: KeyPointShape
+}
+
 impl KeyPoint {
     pub fn new(x: f32, y: f32, color: (u8, u8, u8), shape: KeyPointShape) -> KeyPoint {
-        return KeyPoint {x, y, color, shape, angle: 0.0, descriptor: Descriptor::None};
+        return KeyPoint {x, y, color, shape, octave: 1, score: 0, angle: 0.0, descriptor: Descriptor::None};
     }
 
     pub fn manhattan_distance(&self, b: &KeyPoint) -> f32 {
